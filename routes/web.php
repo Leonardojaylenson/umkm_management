@@ -1,18 +1,15 @@
 <?php
 
+use App\Http\Controllers\LaporanController;
+use App\Http\Controllers\UsahaController;
 use Illuminate\Support\Facades\Route;
 
-/*
-|--------------------------------------------------------------------------
-| Web Routes
-|--------------------------------------------------------------------------
-|
-| Here is where you can register web routes for your application. These
-| routes are loaded by the RouteServiceProvider within a group which
-| contains the "web" middleware group. Now create something great!
-|
-*/
+Route::middleware('guest')->group(function () {
+    Route::get('login',  [UsahaController::class, 'showLogin'])->name('login');
+    Route::post('login', [UsahaController::class, 'login']);
+});
 
-Route::get('/', function () {
-    return view('welcome');
+Route::middleware('auth')->group(function () {
+    Route::post('logout', [UsahaController::class, 'logout'])->name('logout');
+    Route::get('/',       [LaporanController::class, 'dashboard'])->name('dashboard');
 });
