@@ -14,19 +14,26 @@
 
     <div class="table-responsive">
       <table class="table-custom">
-        <thead><tr><th>Nama</th><th>Telepon</th><th>Alamat</th><th>Transaksi</th><th class="text-center">Aksi</th></tr></thead>
+        <thead>
+          <tr><th>Nama</th><th>Telepon</th><th>Alamat</th><th>Transaksi</th><th class="text-center">Aksi</th></tr>
+        </thead>
         <tbody>
           @forelse ($customers as $customer)
             <tr>
               <td class="table-product-name">{{ $customer->customer_name }}</td>
               <td>{{ $customer->phone ?: '-' }}</td>
-              <td>{{ \Illuminate\Support\Str::limit($customer->address, 40) ?: '-' }}</td>
+              <td>{{ $customer->address ?: '-' }}</td>
               <td>{{ $customer->transactions_count }}</td>
               <td>
                 <div class="d-flex justify-content-center gap-1">
-                  <a href="{{ route('pelanggan.show', $customer) }}" class="table-btn-action" title="Detail"><i class="bi bi-eye"></i></a>
-                  <a href="{{ route('pelanggan.edit', $customer) }}" class="table-btn-action" title="Ubah"><i class="bi bi-pencil"></i></a>
-                  <x-delete-form :action="route('pelanggan.destroy', $customer)" :message="'Hapus pelanggan ' . $customer->customer_name . '?'" />
+                  <a href="{{ route('pelanggan.show', $customer->id_customer) }}" class="table-btn-action" title="Detail"><i class="bi bi-eye"></i></a>
+                  <a href="{{ route('pelanggan.edit', $customer->id_customer) }}" class="table-btn-action" title="Ubah"><i class="bi bi-pencil"></i></a>
+
+                  <form action="{{ route('pelanggan.destroy', $customer->id_customer) }}" method="POST" class="d-inline" onsubmit="return confirm('Yakin hapus pelanggan ini?')">
+                    @csrf
+                    @method('DELETE')
+                    <button class="table-btn-action delete" title="Hapus"><i class="bi bi-trash"></i></button>
+                  </form>
                 </div>
               </td>
             </tr>
@@ -37,6 +44,6 @@
       </table>
     </div>
 
-    <x-table-footer :paginator="$customers" />
+    <div class="table-footer-control">{{ $customers->links() }}</div>
   </div>
 @endsection

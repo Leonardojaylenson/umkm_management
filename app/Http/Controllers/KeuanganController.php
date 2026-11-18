@@ -2,136 +2,244 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Controllers\Concerns\ManagesMasterData;
 use App\Models\Customer;
 use App\Models\Debt;
+use App\Models\DebtPayment;
 use App\Models\Expense;
 use App\Models\ExpenseCategory;
 use App\Models\Receivable;
+use App\Models\ReceivablePayment;
 use App\Models\Supplier;
+use App\Models\Transaction;
 use Illuminate\Http\Request;
-use Illuminate\Validation\ValidationException;
 
 class KeuanganController extends Controller
 {
-    use ManagesMasterData;
-
     public function expenseIndex(Request $request)
     {
+        $bid  = $this->businessId();
         $from = $request->input('from', now()->startOfMonth()->toDateString());
         $to   = $request->input('to', now()->toDateString());
 
-        $base = Expense::whereBetween('expense_date', [$from, $to])
-            ->when($request->category, fn ($q, $id) => $q->where('id_expense_category', $id));
+        $query = Expense::where('id_business', $bid)->whereBetween('expense_date', [$from, $to]);
 
-        return view('keuangan.pengeluaran', [
-            'expenses'    => (clone $base)->with('category')->latest('expense_date')->latest('id_expense')->paginate(10)->withQueryString(),
-            'total'       => (clone $base)->sum('amount'),
-            'perCategory' => Expense::whereBetween('expense_date', [$from, $to])
-                ->selectRaw('id_expense_category, SUM(amount) AS total')
-                ->groupBy('id_expense_category')->with('category')->get(),
-            'categories'  => ExpenseCategory::orderBy('category_name')->get(),
-            'from'        => $from,
-            'to'          => $to,
-        ]);
+        if ($request->category) {
+            $query->where('id_expense_category', $request->category);
+        }
+
+        $total    = (clone $query)->sum('amount');
+        $expenses = $query->with('category')->latest('expense_date')->latest('id_expense')->paginate(10)->withQueryString();
+
+        $perCategory = Expense::with('category')
+            ->where('id_business', $bid)
+            ->whereBetween('expense_date', [$from, $to])
+            ->selectRaw('id_expense_category, SUM(amount) AS total')
+            ->groupBy('id_expense_category')
+            ->get();
+
+        $categories = ExpenseCategory::where('id_business', $bid)->orderBy('category_name')->get();
+
+        return view('keuangan.pengeluaran', compact('expenses', 'total', 'perCategory', 'categories', 'from', 'to'));
     }
 
     public function expenseCreate()
     {
-        return view('keuangan.pengeluaran-form', $this->expenseFormData(new Expense(['expense_date' => now()])));
+        $expense    = new Expense(['expense_date' => now()]);
+        $categories = ExpenseCategory::where('id_business', $this->businessId())->orderBy('category_name')->get();
+
+        return view('keuangan.pengeluaran-form', compact('expense', 'categories'));
     }
 
     public function expenseStore(Request $request)
     {
-        Expense::create($this->validateExpense($request) + ['id_user' => auth()->id()]);
+        $bid = $this->businessId();
+
+        $request->validate([
+            'id_expense_category' => 'required|exists:expense_categories,id_expense_category,id_business,' . $bid,
+            'expense_date'        => 'required|date',
+            'amount'              => 'required|numeric|min:1',
+            'note'                => 'nullable|max:255',
+        ]);
+
+        Expense::create([
+            'id_business'         => $bid,
+            'id_expense_category' => $request->id_expense_category,
+            'id_user'             => auth()->id(),
+            'expense_date'        => $request->expense_date,
+            'amount'              => $request->amount,
+            'note'                => $request->note,
+        ]);
 
         return redirect()->route('pengeluaran.index')->with('success', 'Pengeluaran berhasil dicatat.');
     }
 
-    public function expenseEdit(Expense $expense)
+    public function expenseEdit($id)
     {
-        return view('keuangan.pengeluaran-form', $this->expenseFormData($expense));
+        $bid        = $this->businessId();
+        $expense    = Expense::where('id_business', $bid)->findOrFail($id);
+        $categories = ExpenseCategory::where('id_business', $bid)->orderBy('category_name')->get();
+
+        return view('keuangan.pengeluaran-form', compact('expense', 'categories'));
     }
 
-    public function expenseUpdate(Request $request, Expense $expense)
+    public function expenseUpdate(Request $request, $id)
     {
-        $expense->update($this->validateExpense($request));
+        $bid     = $this->businessId();
+        $expense = Expense::where('id_business', $bid)->findOrFail($id);
+
+        $request->validate([
+            'id_expense_category' => 'required|exists:expense_categories,id_expense_category,id_business,' . $bid,
+            'expense_date'        => 'required|date',
+            'amount'              => 'required|numeric|min:1',
+            'note'                => 'nullable|max:255',
+        ]);
+
+        $expense->update([
+            'id_expense_category' => $request->id_expense_category,
+            'expense_date'        => $request->expense_date,
+            'amount'              => $request->amount,
+            'note'                => $request->note,
+        ]);
 
         return redirect()->route('pengeluaran.index')->with('success', 'Pengeluaran berhasil diperbarui.');
     }
 
-    public function expenseDestroy(Expense $expense)
+    public function expenseDestroy($id)
     {
+        $expense = Expense::where('id_business', $this->businessId())->findOrFail($id);
         $expense->delete();
 
         return redirect()->route('pengeluaran.index')->with('success', 'Catatan pengeluaran berhasil dihapus.');
     }
 
-    private function validateExpense(Request $request): array
+    public function expenseCategoryIndex()
     {
-        return $request->validate([
-            'id_expense_category' => ['required', $this->existsInBusiness('expense_categories', 'id_expense_category')],
-            'expense_date'        => 'required|date',
-            'amount'              => 'required|numeric|min:1',
-            'note'                => 'nullable|string|max:255',
+        $rows    = ExpenseCategory::withCount('expenses')->where('id_business', $this->businessId())->orderBy('category_name')->get();
+        $editing = null;
+
+        return view('keuangan.kategori-pengeluaran', compact('rows', 'editing'));
+    }
+
+    public function expenseCategoryEdit($id)
+    {
+        $bid     = $this->businessId();
+        $rows    = ExpenseCategory::withCount('expenses')->where('id_business', $bid)->orderBy('category_name')->get();
+        $editing = ExpenseCategory::where('id_business', $bid)->findOrFail($id);
+
+        return view('keuangan.kategori-pengeluaran', compact('rows', 'editing'));
+    }
+
+    public function expenseCategoryStore(Request $request)
+    {
+        $bid = $this->businessId();
+
+        $request->validate([
+            'category_name' => 'required|max:100|unique:expense_categories,category_name,NULL,id_expense_category,id_business,' . $bid,
         ]);
+
+        ExpenseCategory::create(['id_business' => $bid, 'category_name' => $request->category_name]);
+
+        return redirect()->route('kategori-pengeluaran.index')->with('success', 'Kategori pengeluaran berhasil ditambahkan.');
     }
 
-    private function expenseFormData(Expense $expense): array
+    public function expenseCategoryUpdate(Request $request, $id)
     {
-        return ['expense' => $expense, 'categories' => ExpenseCategory::orderBy('category_name')->get()];
+        $bid      = $this->businessId();
+        $category = ExpenseCategory::where('id_business', $bid)->findOrFail($id);
+
+        $request->validate([
+            'category_name' => 'required|max:100|unique:expense_categories,category_name,' . $category->id_expense_category . ',id_expense_category,id_business,' . $bid,
+        ]);
+
+        $category->update(['category_name' => $request->category_name]);
+
+        return redirect()->route('kategori-pengeluaran.index')->with('success', 'Kategori pengeluaran berhasil diperbarui.');
     }
 
-    private function expenseCategoryConfig(): array
+    public function expenseCategoryDestroy($id)
     {
-        return ['model' => ExpenseCategory::class, 'field' => 'category_name', 'base' => 'kategori-pengeluaran',
-                'view' => 'keuangan.kategori-pengeluaran', 'usage' => 'expenses', 'usageLabel' => 'catatan pengeluaran',
-                'label' => 'Kategori pengeluaran'];
-    }
+        $category = ExpenseCategory::where('id_business', $this->businessId())->findOrFail($id);
 
-    public function expenseCategoryIndex()                       { return $this->masterPage($this->expenseCategoryConfig()); }
-    public function expenseCategoryEdit(ExpenseCategory $expenseCategory) { return $this->masterPage($this->expenseCategoryConfig(), $expenseCategory); }
-    public function expenseCategoryStore(Request $request)       { return $this->masterStore($request, $this->expenseCategoryConfig()); }
-    public function expenseCategoryUpdate(Request $request, ExpenseCategory $expenseCategory) { return $this->masterUpdate($request, $this->expenseCategoryConfig(), $expenseCategory); }
-    public function expenseCategoryDestroy(ExpenseCategory $expenseCategory) { return $this->masterDestroy($this->expenseCategoryConfig(), $expenseCategory); }
+        $dipakai = $category->expenses()->count();
+
+        if ($dipakai > 0) {
+            return back()->with('error', 'Kategori pengeluaran tidak bisa dihapus karena masih dipakai oleh ' . $dipakai . ' catatan pengeluaran.');
+        }
+
+        $category->delete();
+
+        return redirect()->route('kategori-pengeluaran.index')->with('success', 'Kategori pengeluaran berhasil dihapus.');
+    }
 
     public function supplierIndex(Request $request)
     {
-        $suppliers = Supplier::withCount('debts')
-            ->when($request->q, fn ($q, $s) => $q->where('supplier_name', 'like', "%$s%"))
-            ->orderBy('supplier_name')
-            ->paginate(10)->withQueryString();
+        $query = Supplier::withCount('debts')->where('id_business', $this->businessId());
+
+        if ($request->q) {
+            $query->where('supplier_name', 'like', '%' . $request->q . '%');
+        }
+
+        $suppliers = $query->orderBy('supplier_name')->paginate(10)->withQueryString();
 
         return view('keuangan.supplier', compact('suppliers'));
     }
 
     public function supplierCreate()
     {
-        return view('keuangan.supplier-form', ['supplier' => new Supplier()]);
+        $supplier = new Supplier();
+
+        return view('keuangan.supplier-form', compact('supplier'));
     }
 
     public function supplierStore(Request $request)
     {
-        Supplier::create($this->validateSupplier($request));
+        $request->validate([
+            'supplier_name' => 'required|max:150',
+            'phone'         => 'nullable|max:20',
+            'address'       => 'nullable|max:1000',
+        ]);
+
+        Supplier::create([
+            'id_business'   => $this->businessId(),
+            'supplier_name' => $request->supplier_name,
+            'phone'         => $request->phone,
+            'address'       => $request->address,
+        ]);
 
         return redirect()->route('supplier.index')->with('success', 'Supplier berhasil ditambahkan.');
     }
 
-    public function supplierEdit(Supplier $supplier)
+    public function supplierEdit($id)
     {
+        $supplier = Supplier::where('id_business', $this->businessId())->findOrFail($id);
+
         return view('keuangan.supplier-form', compact('supplier'));
     }
 
-    public function supplierUpdate(Request $request, Supplier $supplier)
+    public function supplierUpdate(Request $request, $id)
     {
-        $supplier->update($this->validateSupplier($request));
+        $supplier = Supplier::where('id_business', $this->businessId())->findOrFail($id);
+
+        $request->validate([
+            'supplier_name' => 'required|max:150',
+            'phone'         => 'nullable|max:20',
+            'address'       => 'nullable|max:1000',
+        ]);
+
+        $supplier->update([
+            'supplier_name' => $request->supplier_name,
+            'phone'         => $request->phone,
+            'address'       => $request->address,
+        ]);
 
         return redirect()->route('supplier.index')->with('success', 'Supplier berhasil diperbarui.');
     }
 
-    public function supplierDestroy(Supplier $supplier)
+    public function supplierDestroy($id)
     {
-        if ($supplier->debts()->exists()) {
+        $supplier = Supplier::where('id_business', $this->businessId())->findOrFail($id);
+
+        if ($supplier->debts()->count() > 0) {
             return back()->with('error', 'Supplier tidak bisa dihapus karena masih punya catatan hutang.');
         }
 
@@ -140,25 +248,20 @@ class KeuanganController extends Controller
         return redirect()->route('supplier.index')->with('success', 'Supplier berhasil dihapus.');
     }
 
-    private function validateSupplier(Request $request): array
-    {
-        return $request->validate([
-            'supplier_name' => 'required|string|max:150',
-            'phone'         => 'nullable|string|max:20',
-            'address'       => 'nullable|string|max:1000',
-        ]);
-    }
-
     public function debtIndex(Request $request)
     {
-        $debts = Debt::with('supplier')
-            ->when($request->status, fn ($q, $v) => $q->where('status', $v))
-            ->orderByRaw("status = 'paid'")
-            ->orderByRaw('due_date IS NULL')
-            ->orderBy('due_date')
+        $bid = $this->businessId();
+
+        $query = Debt::with('supplier')->where('id_business', $bid);
+
+        if ($request->status) {
+            $query->where('status', $request->status);
+        }
+
+        $debts = $query->orderByRaw("status = 'paid'")->orderByRaw('due_date IS NULL')->orderBy('due_date')
             ->paginate(10)->withQueryString();
 
-        $outstanding = Debt::where('status', '!=', 'paid')
+        $outstanding = Debt::where('id_business', $bid)->where('status', '!=', 'paid')
             ->selectRaw('COALESCE(SUM(amount - paid_amount), 0) AS total')->value('total');
 
         return view('keuangan.hutang', compact('debts', 'outstanding'));
@@ -166,84 +269,140 @@ class KeuanganController extends Controller
 
     public function debtCreate()
     {
-        return view('keuangan.hutang-form', $this->debtFormData(new Debt(['debt_date' => now()])));
+        $debt      = new Debt(['debt_date' => now()]);
+        $suppliers = Supplier::where('id_business', $this->businessId())->orderBy('supplier_name')->get();
+
+        return view('keuangan.hutang-form', compact('debt', 'suppliers'));
     }
 
     public function debtStore(Request $request)
     {
-        Debt::create($this->validateDebt($request) + ['id_user' => auth()->id(), 'status' => 'unpaid', 'paid_amount' => 0]);
+        $bid = $this->businessId();
+
+        $request->validate([
+            'id_supplier' => 'required|exists:suppliers,id_supplier,id_business,' . $bid,
+            'amount'      => 'required|numeric|min:1',
+            'debt_date'   => 'required|date',
+            'due_date'    => 'nullable|date|after_or_equal:debt_date',
+            'note'        => 'nullable|max:255',
+        ]);
+
+        Debt::create([
+            'id_business' => $bid,
+            'id_supplier' => $request->id_supplier,
+            'id_user'     => auth()->id(),
+            'note'        => $request->note,
+            'amount'      => $request->amount,
+            'paid_amount' => 0,
+            'debt_date'   => $request->debt_date,
+            'due_date'    => $request->due_date,
+            'status'      => 'unpaid',
+        ]);
 
         return redirect()->route('hutang.index')->with('success', 'Hutang berhasil dicatat.');
     }
 
-    public function debtShow(Debt $debt)
+    public function debtShow($id)
     {
-        $debt->load(['supplier', 'payments']);
+        $debt = Debt::with(['supplier', 'payments'])->where('id_business', $this->businessId())->findOrFail($id);
 
         return view('keuangan.hutang-detail', compact('debt'));
     }
 
-    public function debtEdit(Debt $debt)
+    public function debtEdit($id)
     {
-        return view('keuangan.hutang-form', $this->debtFormData($debt));
+        $bid       = $this->businessId();
+        $debt      = Debt::where('id_business', $bid)->findOrFail($id);
+        $suppliers = Supplier::where('id_business', $bid)->orderBy('supplier_name')->get();
+
+        return view('keuangan.hutang-form', compact('debt', 'suppliers'));
     }
 
-    public function debtUpdate(Request $request, Debt $debt)
+    public function debtUpdate(Request $request, $id)
     {
-        $data = $this->validateDebt($request);
+        $bid  = $this->businessId();
+        $debt = Debt::where('id_business', $bid)->findOrFail($id);
 
-        if ($data['amount'] < (float) $debt->paid_amount) {
-            throw ValidationException::withMessages([
-                'amount' => 'Total hutang tidak boleh kurang dari yang sudah dibayar (' . rupiah($debt->paid_amount) . ').',
-            ]);
+        $request->validate([
+            'id_supplier' => 'required|exists:suppliers,id_supplier,id_business,' . $bid,
+            'amount'      => 'required|numeric|min:1',
+            'debt_date'   => 'required|date',
+            'due_date'    => 'nullable|date|after_or_equal:debt_date',
+            'note'        => 'nullable|max:255',
+        ]);
+
+        if ($request->amount < $debt->paid_amount) {
+            return back()->withInput()->withErrors(['amount' => 'Total hutang tidak boleh kurang dari yang sudah dibayar (' . rupiah($debt->paid_amount) . ').']);
         }
 
-        $debt->update($data);
-        $debt->refreshStatus();
+        $debt->update([
+            'id_supplier' => $request->id_supplier,
+            'amount'      => $request->amount,
+            'debt_date'   => $request->debt_date,
+            'due_date'    => $request->due_date,
+            'note'        => $request->note,
+            'status'      => $this->tentukanStatus($request->amount, $debt->paid_amount),
+        ]);
 
-        return redirect()->route('hutang.show', $debt)->with('success', 'Hutang berhasil diperbarui.');
+        return redirect()->route('hutang.show', $debt->id_debt)->with('success', 'Hutang berhasil diperbarui.');
     }
 
-    public function debtDestroy(Debt $debt)
+    public function debtDestroy($id)
     {
+        $debt = Debt::where('id_business', $this->businessId())->findOrFail($id);
         $debt->delete();
 
         return redirect()->route('hutang.index')->with('success', 'Catatan hutang berhasil dihapus.');
     }
 
-    public function debtPay(Request $request, Debt $debt)
+    public function debtPay(Request $request, $id)
     {
-        $debt->addPayment(...$this->validatePayment($request));
+        $debt = Debt::where('id_business', $this->businessId())->findOrFail($id);
+
+        $request->validate([
+            'amount'       => 'required|numeric|min:1',
+            'payment_date' => 'required|date',
+            'note'         => 'nullable|max:255',
+        ]);
+
+        $sisa = $debt->amount - $debt->paid_amount;
+
+        if ($request->amount > $sisa) {
+            return back()->withInput()->withErrors(['amount' => 'Jumlah bayar tidak boleh melebihi sisa (' . rupiah($sisa) . ').']);
+        }
+
+        DebtPayment::create([
+            'id_debt'      => $debt->id_debt,
+            'id_user'      => auth()->id(),
+            'amount'       => $request->amount,
+            'payment_date' => $request->payment_date,
+            'note'         => $request->note,
+        ]);
+
+        $paidBaru = $debt->paid_amount + $request->amount;
+
+        $debt->update([
+            'paid_amount' => $paidBaru,
+            'status'      => $this->tentukanStatus($debt->amount, $paidBaru),
+        ]);
 
         return back()->with('success', 'Pembayaran hutang berhasil dicatat.');
     }
 
-    private function validateDebt(Request $request): array
-    {
-        return $request->validate([
-            'id_supplier' => ['required', $this->existsInBusiness('suppliers', 'id_supplier')],
-            'amount'      => 'required|numeric|min:1',
-            'debt_date'   => 'required|date',
-            'due_date'    => 'nullable|date|after_or_equal:debt_date',
-            'note'        => 'nullable|string|max:255',
-        ]);
-    }
-
-    private function debtFormData(Debt $debt): array
-    {
-        return ['debt' => $debt, 'suppliers' => Supplier::orderBy('supplier_name')->get()];
-    }
-
     public function receivableIndex(Request $request)
     {
-        $receivables = Receivable::with('customer')
-            ->when($request->status, fn ($q, $v) => $q->where('status', $v))
-            ->orderByRaw("status = 'paid'")
-            ->orderByRaw('due_date IS NULL')
-            ->orderBy('due_date')
+        $bid = $this->businessId();
+
+        $query = Receivable::with('customer')->where('id_business', $bid);
+
+        if ($request->status) {
+            $query->where('status', $request->status);
+        }
+
+        $receivables = $query->orderByRaw("status = 'paid'")->orderByRaw('due_date IS NULL')->orderBy('due_date')
             ->paginate(10)->withQueryString();
 
-        $outstanding = Receivable::where('status', '!=', 'paid')
+        $outstanding = Receivable::where('id_business', $bid)->where('status', '!=', 'paid')
             ->selectRaw('COALESCE(SUM(amount - paid_amount), 0) AS total')->value('total');
 
         return view('keuangan.piutang', compact('receivables', 'outstanding'));
@@ -251,48 +410,98 @@ class KeuanganController extends Controller
 
     public function receivableCreate()
     {
-        return view('keuangan.piutang-form', $this->receivableFormData(new Receivable(['receivable_date' => now()])));
+        $receivable = new Receivable(['receivable_date' => now()]);
+        $customers  = Customer::where('id_business', $this->businessId())->orderBy('customer_name')->get();
+
+        return view('keuangan.piutang-form', compact('receivable', 'customers'));
     }
 
     public function receivableStore(Request $request)
     {
-        Receivable::create($this->validateReceivable($request) + ['id_user' => auth()->id(), 'status' => 'unpaid', 'paid_amount' => 0]);
+        $bid = $this->businessId();
+
+        $request->validate([
+            'id_customer'     => 'required|exists:customers,id_customer,id_business,' . $bid,
+            'amount'          => 'required|numeric|min:1',
+            'receivable_date' => 'required|date',
+            'due_date'        => 'nullable|date|after_or_equal:receivable_date',
+            'note'            => 'nullable|max:255',
+        ]);
+
+        Receivable::create([
+            'id_business'     => $bid,
+            'id_customer'     => $request->id_customer,
+            'id_user'         => auth()->id(),
+            'note'            => $request->note,
+            'amount'          => $request->amount,
+            'paid_amount'     => 0,
+            'receivable_date' => $request->receivable_date,
+            'due_date'        => $request->due_date,
+            'status'          => 'unpaid',
+        ]);
 
         return redirect()->route('piutang.index')->with('success', 'Piutang berhasil dicatat.');
     }
 
-    public function receivableShow(Receivable $receivable)
+    public function receivableShow($id)
     {
-        $receivable->load(['customer', 'payments', 'transaction']);
+        $receivable = Receivable::with(['customer', 'payments', 'transaction'])
+            ->where('id_business', $this->businessId())->findOrFail($id);
 
         return view('keuangan.piutang-detail', compact('receivable'));
     }
 
-    public function receivableEdit(Receivable $receivable)
+    public function receivableEdit($id)
     {
-        return view('keuangan.piutang-form', $this->receivableFormData($receivable));
+        $bid        = $this->businessId();
+        $receivable = Receivable::where('id_business', $bid)->findOrFail($id);
+        $customers  = Customer::where('id_business', $bid)->orderBy('customer_name')->get();
+
+        return view('keuangan.piutang-form', compact('receivable', 'customers'));
     }
 
-    public function receivableUpdate(Request $request, Receivable $receivable)
+    public function receivableUpdate(Request $request, $id)
     {
-        $data = $this->validateReceivable($request);
+        $bid        = $this->businessId();
+        $receivable = Receivable::where('id_business', $bid)->findOrFail($id);
+
+        $request->validate([
+            'id_customer'     => 'required|exists:customers,id_customer,id_business,' . $bid,
+            'amount'          => 'required|numeric|min:1',
+            'receivable_date' => 'required|date',
+            'due_date'        => 'nullable|date|after_or_equal:receivable_date',
+            'note'            => 'nullable|max:255',
+        ]);
 
         if ($receivable->id_transaction) {
-            $data = collect($data)->only(['due_date', 'note'])->all();
-        } elseif ($data['amount'] < (float) $receivable->paid_amount) {
-            throw ValidationException::withMessages([
-                'amount' => 'Total piutang tidak boleh kurang dari yang sudah dibayar (' . rupiah($receivable->paid_amount) . ').',
+            $receivable->update([
+                'due_date' => $request->due_date,
+                'note'     => $request->note,
             ]);
+
+            return redirect()->route('piutang.show', $receivable->id_receivable)->with('success', 'Piutang berhasil diperbarui.');
         }
 
-        $receivable->update($data);
-        $receivable->refreshStatus();
+        if ($request->amount < $receivable->paid_amount) {
+            return back()->withInput()->withErrors(['amount' => 'Total piutang tidak boleh kurang dari yang sudah dibayar (' . rupiah($receivable->paid_amount) . ').']);
+        }
 
-        return redirect()->route('piutang.show', $receivable)->with('success', 'Piutang berhasil diperbarui.');
+        $receivable->update([
+            'id_customer'     => $request->id_customer,
+            'amount'          => $request->amount,
+            'receivable_date' => $request->receivable_date,
+            'due_date'        => $request->due_date,
+            'note'            => $request->note,
+            'status'          => $this->tentukanStatus($request->amount, $receivable->paid_amount),
+        ]);
+
+        return redirect()->route('piutang.show', $receivable->id_receivable)->with('success', 'Piutang berhasil diperbarui.');
     }
 
-    public function receivableDestroy(Receivable $receivable)
+    public function receivableDestroy($id)
     {
+        $receivable = Receivable::where('id_business', $this->businessId())->findOrFail($id);
+
         if ($receivable->id_transaction) {
             return back()->with('error', 'Piutang ini berasal dari transaksi. Ubah atau batalkan transaksinya untuk menghapus piutang.');
         }
@@ -302,37 +511,58 @@ class KeuanganController extends Controller
         return redirect()->route('piutang.index')->with('success', 'Catatan piutang berhasil dihapus.');
     }
 
-    public function receivablePay(Request $request, Receivable $receivable)
+    public function receivablePay(Request $request, $id)
     {
-        $receivable->addPayment(...$this->validatePayment($request));
+        $receivable = Receivable::where('id_business', $this->businessId())->findOrFail($id);
+
+        $request->validate([
+            'amount'       => 'required|numeric|min:1',
+            'payment_date' => 'required|date',
+            'note'         => 'nullable|max:255',
+        ]);
+
+        $sisa = $receivable->amount - $receivable->paid_amount;
+
+        if ($request->amount > $sisa) {
+            return back()->withInput()->withErrors(['amount' => 'Jumlah bayar tidak boleh melebihi sisa (' . rupiah($sisa) . ').']);
+        }
+
+        ReceivablePayment::create([
+            'id_receivable' => $receivable->id_receivable,
+            'id_user'       => auth()->id(),
+            'amount'        => $request->amount,
+            'payment_date'  => $request->payment_date,
+            'note'          => $request->note,
+        ]);
+
+        $paidBaru = $receivable->paid_amount + $request->amount;
+
+        $receivable->update([
+            'paid_amount' => $paidBaru,
+            'status'      => $this->tentukanStatus($receivable->amount, $paidBaru),
+        ]);
+
+        if ($receivable->id_transaction) {
+            $transaction = Transaction::find($receivable->id_transaction);
+
+            $transaction->paid_amount = $transaction->paid_amount + $request->amount;
+            $transaction->payment_status = $transaction->paid_amount >= $transaction->total_amount ? 'paid' : 'down_payment';
+            $transaction->save();
+        }
 
         return back()->with('success', 'Pembayaran piutang berhasil dicatat.');
     }
 
-    private function validateReceivable(Request $request): array
+    private function tentukanStatus($amount, $paid)
     {
-        return $request->validate([
-            'id_customer'     => ['required', $this->existsInBusiness('customers', 'id_customer')],
-            'amount'          => 'required|numeric|min:1',
-            'receivable_date' => 'required|date',
-            'due_date'        => 'nullable|date|after_or_equal:receivable_date',
-            'note'            => 'nullable|string|max:255',
-        ]);
-    }
+        if ($paid >= $amount) {
+            return 'paid';
+        }
 
-    private function receivableFormData(Receivable $receivable): array
-    {
-        return ['receivable' => $receivable, 'customers' => Customer::orderBy('customer_name')->get()];
-    }
+        if ($paid > 0) {
+            return 'partial';
+        }
 
-    private function validatePayment(Request $request): array
-    {
-        $data = $request->validate([
-            'amount'       => 'required|numeric|min:1',
-            'payment_date' => 'required|date',
-            'note'         => 'nullable|string|max:255',
-        ]);
-
-        return [(float) $data['amount'], $data['payment_date'], $data['note'] ?? null];
+        return 'unpaid';
     }
 }

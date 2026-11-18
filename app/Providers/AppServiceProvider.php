@@ -4,9 +4,9 @@ namespace App\Providers;
 
 use App\Models\Debt;
 use App\Models\Receivable;
+use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\View;
-use Illuminate\Pagination\Paginator;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -26,13 +26,19 @@ class AppServiceProvider extends ServiceProvider
                 return $view->with(['lowStockCount' => 0, 'dueCount' => 0]);
             }
 
-            $lowStock = DB::table('v_low_stock_items')->where('id_business', $user->id_business)->count();
+            $lowStock = 0;
+            if ($user->canAccess('item')) {
+                $lowStock = DB::table('v_low_stock_items')->where('id_business', $user->id_business)->count();
+            }
 
             $due = 0;
-            if ($user->isOwner()) {
-                $limit = now()->addDays(7)->toDateString();
-                $due = Debt::where('status', '!=', 'paid')->whereNotNull('due_date')->where('due_date', '<=', $limit)->count()
-                     + Receivable::where('status', '!=', 'paid')->whereNotNull('due_date')->where('due_date', '<=', $limit)->count();
+            if ($user->canAccess('hutang')) {
+                $batas = now()->addDays(7)->toDateString();
+
+                $due = Debt::where('id_business', $user->id_business)
+                        ->where('status', '!=', 'paid')->whereNotNull('due_date')->where('due_date', '<=', $batas)->count()
+                     + Receivable::where('id_business', $user->id_business)
+                        ->where('status', '!=', 'paid')->whereNotNull('due_date')->where('due_date', '<=', $batas)->count();
             }
 
             $view->with(['lowStockCount' => $lowStock, 'dueCount' => $due]);

@@ -3,7 +3,7 @@
 @section('subtitle', 'Barang dan layanan yang Anda jual.')
 
 @section('content')
-  @if ($lowStockCount > 0 && request('filter') !== 'stok-menipis')
+  @if ($lowStockCount > 0 && request('filter') != 'stok-menipis')
     <div class="alert-custom alert-custom-warning">
       <i class="bi bi-exclamation-circle-fill alert-custom-icon"></i>
       <div class="alert-custom-content">
@@ -23,16 +23,16 @@
         <select name="category" class="form-select-custom form-control-custom-sm" onchange="this.form.submit()">
           <option value="">Semua Kategori</option>
           @foreach ($categories as $category)
-            <option value="{{ $category->id_category }}" @selected(request('category') == $category->id_category)>{{ $category->category_name }}</option>
+            <option value="{{ $category->id_category }}" {{ request('category') == $category->id_category ? 'selected' : '' }}>{{ $category->category_name }}</option>
           @endforeach
         </select>
         <select name="filter" class="form-select-custom form-control-custom-sm" onchange="this.form.submit()">
           <option value="">Semua Stok</option>
-          <option value="stok-menipis" @selected(request('filter') === 'stok-menipis')>Stok Menipis</option>
+          <option value="stok-menipis" {{ request('filter') == 'stok-menipis' ? 'selected' : '' }}>Stok Menipis</option>
         </select>
-        @if (auth()->user()->isOwner())
-          <a href="{{ route('item.create') }}" class="btn-custom btn-custom-primary btn-custom-sm"><i class="bi bi-plus-lg"></i> Tambah Item</a>
-        @endif
+        <a href="{{ route('kategori.index') }}" class="btn-custom btn-custom-light btn-custom-sm">Kategori</a>
+        <a href="{{ route('satuan.index') }}" class="btn-custom btn-custom-light btn-custom-sm">Satuan</a>
+        <a href="{{ route('item.create') }}" class="btn-custom btn-custom-primary btn-custom-sm"><i class="bi bi-plus-lg"></i> Tambah Item</a>
       </div>
     </form>
 
@@ -65,16 +65,21 @@
                   <span class="text-muted-green">Tanpa stok</span>
                 @else
                   {{ qty($item->stock) }} {{ $item->unit->unit_name ?? '' }}
-                  @if ($item->is_low_stock)<span class="badge-table pending ms-1">Menipis</span>@endif
+                  @if ($item->stock <= $item->min_stock)
+                    <span class="badge-table pending ms-1">Menipis</span>
+                  @endif
                 @endif
               </td>
               <td>
                 <div class="d-flex justify-content-center gap-1">
-                  <a href="{{ route('item.show', $item) }}" class="table-btn-action" title="Detail"><i class="bi bi-eye"></i></a>
-                  @if (auth()->user()->isOwner())
-                    <a href="{{ route('item.edit', $item) }}" class="table-btn-action" title="Ubah"><i class="bi bi-pencil"></i></a>
-                    <x-delete-form :action="route('item.destroy', $item)" :message="'Hapus item ' . $item->item_name . '?'" />
-                  @endif
+                  <a href="{{ route('item.show', $item->id_item) }}" class="table-btn-action" title="Detail"><i class="bi bi-eye"></i></a>
+                  <a href="{{ route('item.edit', $item->id_item) }}" class="table-btn-action" title="Ubah"><i class="bi bi-pencil"></i></a>
+
+                  <form action="{{ route('item.destroy', $item->id_item) }}" method="POST" class="d-inline" onsubmit="return confirm('Yakin hapus item ini?')">
+                    @csrf
+                    @method('DELETE')
+                    <button class="table-btn-action delete" title="Hapus"><i class="bi bi-trash"></i></button>
+                  </form>
                 </div>
               </td>
             </tr>
@@ -85,6 +90,6 @@
       </table>
     </div>
 
-    <x-table-footer :paginator="$items" />
+    <div class="table-footer-control">{{ $items->links() }}</div>
   </div>
 @endsection

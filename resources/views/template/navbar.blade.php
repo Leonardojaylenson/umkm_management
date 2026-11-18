@@ -1,5 +1,3 @@
-@php $isOwner = auth()->user()->isOwner(); @endphp
-
 <header class="navbar-custom">
   <div class="navbar-left">
     <button class="btn-desktop-toggle d-none d-xl-flex align-items-center justify-content-center me-3"
@@ -17,20 +15,28 @@
       </button>
       <ul class="dropdown-menu dropdown-menu-quick-action" aria-labelledby="quick-actions-dropdown">
         <li class="dropdown-header">Aksi Cepat</li>
-        <li><a class="dropdown-item" href="{{ route('transaksi.create') }}"><i class="bi bi-cart-plus"></i> Penjualan Baru</a></li>
-        <li><a class="dropdown-item" href="{{ route('pelanggan.create') }}"><i class="bi bi-person-plus"></i> Pelanggan Baru</a></li>
-        @if ($isOwner)
+        @if (auth()->user()->canAccess('transaksi'))
+          <li><a class="dropdown-item" href="{{ route('transaksi.create') }}"><i class="bi bi-cart-plus"></i> Penjualan Baru</a></li>
+          <li><a class="dropdown-item" href="{{ route('pelanggan.create') }}"><i class="bi bi-person-plus"></i> Pelanggan Baru</a></li>
+        @endif
+        @if (auth()->user()->canAccess('item'))
           <li><a class="dropdown-item" href="{{ route('item.create') }}"><i class="bi bi-box-seam"></i> Item Baru</a></li>
+        @endif
+        @if (auth()->user()->canAccess('pengeluaran'))
           <li><a class="dropdown-item" href="{{ route('pengeluaran.create') }}"><i class="bi bi-wallet2"></i> Catat Pengeluaran</a></li>
         @endif
       </ul>
     </div>
   </div>
 
+  @if (auth()->user()->canAccess('item'))
     <form action="{{ route('item.index') }}" method="GET" class="navbar-search-wrapper">
-    <input type="text" name="q" class="navbar-search-input" placeholder="Cari item..." id="main-search" value="{{ request('q') }}">
-    <button class="navbar-search-btn" aria-label="Cari"><i class="bi bi-search"></i></button>
-  </form>
+      <input type="text" name="q" class="navbar-search-input" placeholder="Cari item..." id="main-search" value="{{ request('q') }}">
+      <button class="navbar-search-btn" aria-label="Cari"><i class="bi bi-search"></i></button>
+    </form>
+  @else
+    <div class="navbar-search-wrapper"></div>
+  @endif
 
   <div class="navbar-actions">
     <button class="navbar-action-btn me-1" aria-label="Layar Penuh" id="btn-fullscreen">
@@ -81,9 +87,9 @@
         <i class="bi bi-chevron-down navbar-profile-caret"></i>
       </button>
       <ul class="dropdown-menu dropdown-menu-end dropdown-menu-profile" aria-labelledby="profile-dropdown">
-        <li class="dropdown-header">{{ auth()->user()->role_label }}</li>
+        <li class="dropdown-header">{{ auth()->user()->level->level_name ?? '-' }}</li>
         <li><a class="dropdown-item" href="{{ route('profil') }}"><i class="bi bi-person"></i> Profil Saya</a></li>
-        @if ($isOwner)
+        @if (auth()->user()->isOwner())
           <li><a class="dropdown-item" href="{{ route('usaha.show') }}"><i class="bi bi-shop"></i> Profil Usaha</a></li>
         @endif
         <li><a class="dropdown-item" href="{{ route('profil.password') }}"><i class="bi bi-lock"></i> Ubah Kata Sandi</a></li>

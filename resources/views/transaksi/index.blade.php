@@ -10,20 +10,21 @@
         <input type="text" name="q" value="{{ request('q') }}" class="table-search-input" placeholder="No. nota atau pelanggan...">
       </div>
       <div class="table-filter-group">
-        <input type="date" name="from" value="{{ $from }}" class="form-control-custom form-control-custom-sm" title="Dari tanggal">
-        <input type="date" name="to" value="{{ $to }}" class="form-control-custom form-control-custom-sm" title="Sampai tanggal">
+        <input type="date" name="from" value="{{ $from }}" class="form-control-custom form-control-custom-sm">
+        <input type="date" name="to" value="{{ $to }}" class="form-control-custom form-control-custom-sm">
         <select name="payment_status" class="form-select-custom form-control-custom-sm">
           <option value="">Semua Pembayaran</option>
-          <option value="paid" @selected(request('payment_status') === 'paid')>Lunas</option>
-          <option value="unpaid" @selected(request('payment_status') === 'unpaid')>Belum Lunas</option>
-          <option value="down_payment" @selected(request('payment_status') === 'down_payment')>DP</option>
+          <option value="paid" {{ request('payment_status') == 'paid' ? 'selected' : '' }}>Lunas</option>
+          <option value="unpaid" {{ request('payment_status') == 'unpaid' ? 'selected' : '' }}>Belum Lunas</option>
+          <option value="down_payment" {{ request('payment_status') == 'down_payment' ? 'selected' : '' }}>DP</option>
         </select>
         <select name="status" class="form-select-custom form-control-custom-sm">
           <option value="">Semua Status</option>
-          <option value="completed" @selected(request('status') === 'completed')>Selesai</option>
-          <option value="cancelled" @selected(request('status') === 'cancelled')>Dibatalkan</option>
+          <option value="completed" {{ request('status') == 'completed' ? 'selected' : '' }}>Selesai</option>
+          <option value="cancelled" {{ request('status') == 'cancelled' ? 'selected' : '' }}>Dibatalkan</option>
         </select>
         <button class="btn-custom btn-custom-light btn-custom-sm">Terapkan</button>
+        <a href="{{ route('pelanggan.index') }}" class="btn-custom btn-custom-light btn-custom-sm">Pelanggan</a>
         <a href="{{ route('transaksi.create') }}" class="btn-custom btn-custom-primary btn-custom-sm"><i class="bi bi-plus-lg"></i> Penjualan Baru</a>
       </div>
     </form>
@@ -41,12 +42,12 @@
               <td>{{ $trx->customer->customer_name ?? 'Umum' }}</td>
               <td>{{ strtoupper($trx->payment_method) }}</td>
               <td class="table-amount">{{ rupiah($trx->total_amount) }}</td>
-              <td><x-status :value="$trx->payment_status" /></td>
-              <td><x-status :value="$trx->status" /></td>
+              <td>{!! badge($trx->payment_status) !!}</td>
+              <td>{!! badge($trx->status) !!}</td>
               <td>
                 <div class="d-flex justify-content-center gap-1">
-                  <a href="{{ route('transaksi.show', $trx) }}" class="table-btn-action" title="Detail"><i class="bi bi-eye"></i></a>
-                  <a href="{{ route('transaksi.print', $trx) }}" target="_blank" class="table-btn-action" title="Cetak nota"><i class="bi bi-printer"></i></a>
+                  <a href="{{ route('transaksi.show', $trx->id_transaction) }}" class="table-btn-action" title="Detail"><i class="bi bi-eye"></i></a>
+                  <a href="#" onclick="bukaNota('{{ route('transaksi.print', $trx->id_transaction) }}'); return false;" class="table-btn-action" title="Cetak nota"><i class="bi bi-printer"></i></a>
                 </div>
               </td>
             </tr>
@@ -57,6 +58,6 @@
       </table>
     </div>
 
-    <x-table-footer :paginator="$transactions" />
+    <div class="table-footer-control">{{ $transactions->links() }}</div>
   </div>
 @endsection

@@ -73,6 +73,8 @@ class UmkmFlowTest extends TestCase
         $user = User::where('email', 'baru@example.com')->first();
         $this->assertNotNull($user->id_business);
         $this->assertDatabaseHas('expense_categories', ['id_business' => $user->id_business, 'category_name' => 'Gaji']);
+        $this->assertDatabaseHas('levels', ['id_business' => $user->id_business, 'level_name' => 'Karyawan', 'is_owner' => 0]);
+        $this->assertTrue($user->fresh()->isOwner());
         $this->get('/')->assertOk();
     }
 
@@ -81,7 +83,7 @@ class UmkmFlowTest extends TestCase
         $this->actingAs($this->owner());
 
         $this->post('/pengguna', [
-            'name' => 'Kasir Dua', 'email' => 'kasir2@example.com', 'role' => 'cashier',
+            'name' => 'Kasir Dua', 'email' => 'kasir2@example.com', 'id_level' => 2,
             'password' => 'rahasia1', 'password_confirmation' => 'rahasia1',
         ])->assertRedirect('/pengguna');
 
@@ -102,7 +104,7 @@ class UmkmFlowTest extends TestCase
         $this->actingAs($this->owner());
 
         foreach ([
-            '/', '/profil', '/profil/password', '/usaha', '/usaha/ubah', '/pengguna', '/pengguna/create',
+            '/', '/profil', '/profil/password', '/usaha', '/usaha/ubah', '/pengguna', '/pengguna/create', '/level',
             '/item', '/item/create', '/kategori', '/satuan', '/transaksi', '/transaksi/create',
             '/pelanggan', '/pelanggan/create', '/pengeluaran', '/pengeluaran/create', '/kategori-pengeluaran',
             '/supplier', '/supplier/create', '/hutang', '/hutang/create', '/piutang', '/piutang/create',
@@ -112,19 +114,96 @@ class UmkmFlowTest extends TestCase
         }
     }
 
-    public function test_cashier_cannot_open_owner_pages_but_can_sell(): void
+    public function test_employee_level_only_opens_allowed_menus(): void
     {
         $this->actingAs($this->cashier());
 
-        foreach (['/pengguna', '/item/create', '/kategori', '/pengeluaran', '/hutang', '/piutang', '/laporan', '/target', '/usaha'] as $url) {
+        foreach (['/pengguna', '/pengguna/create', '/level', '/usaha', '/pengeluaran', '/hutang', '/piutang', '/laporan', '/target'] as $url) {
             $this->get($url)->assertForbidden();
         }
 
-        foreach (['/', '/item', '/transaksi', '/transaksi/create', '/pelanggan'] as $url) {
+        foreach (['/', '/item', '/item/create', '/kategori', '/transaksi', '/transaksi/create', '/pelanggan'] as $url) {
             $this->get($url)->assertOk();
         }
 
+        $this->post('/pengguna', ['name' => 'X', 'email' => 'x@example.com', 'id_level' => 1,
+            'password' => 'rahasia1', 'password_confirmation' => 'rahasia1'])->assertForbidden();
+
         $this->sale()->assertRedirect();
+    }
+
+    public function test_sidebar_follows_the_user_level(): void
+    {
+        $this->actingAs($this->cashier())->get('/')
+            ->assertSee('Item &amp; Stok', false)
+            ->assertSee('Transaksi Penjualan')
+            ->assertDontSee('Laporan &amp; Target', false)
+            ->assertDontSee('Pengaturan Level');
+
+        $this->actingAs($this->owner())->get('/')
+            ->assertSee('Laporan &amp; Target', false)
+            ->assertSee('Pengaturan Level')
+            ->assertSee('Daftar Pengguna');
+    }
+
+    public function test_owner_creates_custom_level_and_sets_its_menus(): void
+    {
+        $this->actingAs($this->owner());
+
+        $this->post('/level', ['level_name' => 'Admin Keuangan'])->assertRedirect();
+        $this->post('/level', ['level_name' => 'Admin Keuangan'])->assertSessionHasErrors('level_name');
+        $level = \App\Models\Level::where('level_name', 'Admin Keuangan')->first();
+        $this->assertFalse($level->is_owner);
+        $this->get("/level/{$level->id_level}/edit")->assertOk();
+
+        $this->put("/level/{$level->id_level}", ['level_name' => 'Admin Keuangan', 'menu' => ['pengeluaran', 'hutang']])->assertRedirect('/level');
+        $this->assertEquals(['hutang', 'pengeluaran'], $level->menus()->pluck('menu')->sort()->values()->all());
+
+        $this->put("/level/{$level->id_level}", ['level_name' => 'Admin Keuangan', 'menu' => ['menu-ngawur']])->assertSessionHasErrors('menu.*');
+
+        $this->post('/pengguna', ['name' => 'Rina', 'email' => 'rina@example.com', 'id_level' => $level->id_level,
+            'password' => 'rahasia1', 'password_confirmation' => 'rahasia1'])->assertRedirect('/pengguna');
+        $rina = User::where('email', 'rina@example.com')->first();
+        $this->assertEquals($level->id_level, $rina->id_level);
+
+        $this->actingAs($rina);
+        $this->get('/pengeluaran')->assertOk();
+        $this->get('/hutang')->assertOk();
+        $this->get('/transaksi')->assertForbidden();
+        $this->get('/laporan')->assertForbidden();
+
+        $this->actingAs($this->owner());
+        $this->put("/level/{$level->id_level}", ['level_name' => 'Admin Keuangan', 'menu' => ['transaksi']]);
+        $this->actingAs($rina->fresh());
+        $this->get('/transaksi')->assertOk();
+        $this->get('/pengeluaran')->assertForbidden();
+    }
+
+    public function test_level_delete_rules(): void
+    {
+        $this->actingAs($this->owner());
+
+        $this->delete('/level/1')->assertSessionHas('error');
+        $this->get('/level/1/edit')->assertRedirect('/level');
+        $this->delete('/level/2')->assertSessionHas('error');
+        $this->assertDatabaseHas('levels', ['id_level' => 2]);
+
+        $this->post('/level', ['level_name' => 'Sementara']);
+        $level = \App\Models\Level::where('level_name', 'Sementara')->first();
+        $this->delete("/level/{$level->id_level}")->assertRedirect('/level');
+        $this->assertNull(\App\Models\Level::find($level->id_level));
+    }
+
+    public function test_user_cannot_get_a_level_from_another_business(): void
+    {
+        $other = \App\Models\Business::create(['business_name' => 'Usaha Lain', 'business_type' => 'Jasa']);
+        $levelLain = \App\Models\Level::withoutGlobalScopes()->create(['id_business' => $other->id_business, 'level_name' => 'Pemilik', 'is_owner' => 1]);
+
+        $this->actingAs($this->owner());
+
+        $this->post('/pengguna', ['name' => 'Jahat', 'email' => 'jahat@example.com', 'id_level' => $levelLain->id_level,
+            'password' => 'rahasia1', 'password_confirmation' => 'rahasia1'])->assertSessionHasErrors('id_level');
+        $this->get("/level/{$levelLain->id_level}/edit")->assertNotFound();
     }
 
     public function test_item_crud_and_stock_history(): void
@@ -258,6 +337,36 @@ class UmkmFlowTest extends TestCase
         $this->assertEquals('paid', $receivable->fresh()->status);
         $this->assertEquals('paid', $trx->fresh()->payment_status);
         $this->assertEquals(36000, (float) $trx->fresh()->paid_amount);
+    }
+
+    public function test_editing_note_keeps_receivable_with_installments(): void
+    {
+        $this->actingAs($this->owner());
+
+        $this->sale(['payment_status' => 'unpaid', 'id_customer' => 1]);
+        $trx = Transaction::first();
+        $receivable = Receivable::where('id_transaction', $trx->id_transaction)->first();
+
+        $this->post("/piutang/{$receivable->id_receivable}/bayar", ['amount' => 6000, 'payment_date' => now()->toDateString()]);
+
+        $this->put("/transaksi/{$trx->id_transaction}", [
+            'transaction_date' => now()->format('Y-m-d\TH:i'), 'payment_method' => 'cash',
+            'payment_status' => 'down_payment', 'paid_amount' => 6000, 'id_customer' => 1, 'note' => 'Catatan baru',
+        ])->assertRedirect();
+
+        $receivable = $receivable->fresh();
+        $this->assertEquals(36000, $receivable->amount);
+        $this->assertEquals(6000, $receivable->paid_amount);
+        $this->assertEquals('Catatan baru', $trx->fresh()->note);
+
+        $this->post("/piutang/{$receivable->id_receivable}/bayar", ['amount' => 30000, 'payment_date' => now()->toDateString()]);
+        $this->put("/transaksi/{$trx->id_transaction}", [
+            'transaction_date' => now()->format('Y-m-d\TH:i'), 'payment_method' => 'cash',
+            'payment_status' => 'paid', 'id_customer' => 1, 'note' => 'Sudah lunas',
+        ])->assertRedirect();
+
+        $this->assertEquals(1, Receivable::where('id_transaction', $trx->id_transaction)->count());
+        $this->assertEquals(2, \App\Models\ReceivablePayment::where('id_receivable', $receivable->id_receivable)->count());
     }
 
     public function test_cancel_transaction_restores_stock_and_removes_receivable(): void

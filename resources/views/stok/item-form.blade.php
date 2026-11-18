@@ -1,44 +1,83 @@
 @extends('template.app')
-@php $isNew = ! $item->exists; @endphp
-@section('title', $isNew ? 'Tambah Item' : 'Ubah Item')
-@section('subtitle', $isNew ? 'Daftarkan barang atau layanan baru.' : 'Perbarui harga, kategori, atau foto. Stok diubah lewat halaman detail.')
+@section('title', $item->exists ? 'Ubah Item' : 'Tambah Item')
+@section('subtitle', 'Isi data barang atau layanan. Stok diubah lewat halaman detail item.')
 
 @section('content')
-  <div class="card border-light shadow-sm p-4" style="max-width: 800px">
-    <form action="{{ $isNew ? route('item.store') : route('item.update', $item) }}" method="POST" enctype="multipart/form-data">
+  <div class="card border-light shadow-sm p-4 mx-auto w-100" style="max-width: 800px">
+    <form action="{{ $item->exists ? route('item.update', $item->id_item) : route('item.store') }}" method="POST" enctype="multipart/form-data">
       @csrf
-      @unless ($isNew) @method('PUT') @endunless
+      @if ($item->exists)
+        @method('PUT')
+      @endif
 
-      <x-input name="item_name" label="Nama Item" :value="$item->item_name" required />
+      <div class="mb-3">
+        <label class="form-label-custom">Nama Item</label>
+        <input type="text" name="item_name" class="form-control-custom" value="{{ old('item_name', $item->item_name) }}" required>
+        @error('item_name')<div class="form-feedback-custom invalid-custom">{{ $message }}</div>@enderror
+      </div>
 
       <div class="row">
-        <div class="col-md-6">
-          <x-select name="id_category" label="Kategori" :options="$categories->pluck('category_name', 'id_category')" :value="$item->id_category" placeholder="- Tanpa kategori -" />
+        <div class="col-md-6 mb-3">
+          <label class="form-label-custom">Kategori</label>
+          <select name="id_category" class="form-select-custom">
+            <option value="">- Tanpa kategori -</option>
+            @foreach ($categories as $category)
+              <option value="{{ $category->id_category }}" {{ old('id_category', $item->id_category) == $category->id_category ? 'selected' : '' }}>{{ $category->category_name }}</option>
+            @endforeach
+          </select>
         </div>
-        <div class="col-md-6">
-          <x-select name="id_unit" label="Satuan" :options="$units->pluck('unit_name', 'id_unit')" :value="$item->id_unit" placeholder="- Tanpa satuan -" />
+
+        <div class="col-md-6 mb-3">
+          <label class="form-label-custom">Satuan</label>
+          <select name="id_unit" class="form-select-custom">
+            <option value="">- Tanpa satuan -</option>
+            @foreach ($units as $unit)
+              <option value="{{ $unit->id_unit }}" {{ old('id_unit', $item->id_unit) == $unit->id_unit ? 'selected' : '' }}>{{ $unit->unit_name }}</option>
+            @endforeach
+          </select>
         </div>
-        <div class="col-md-6"><x-input name="selling_price" label="Harga Jual (Rp)" type="number" min="0" step="any" :value="$item->selling_price" required /></div>
-        <div class="col-md-6"><x-input name="cost_price" label="Harga Modal (Rp)" type="number" min="0" step="any" :value="$item->cost_price ?? 0" required /></div>
+
+        <div class="col-md-6 mb-3">
+          <label class="form-label-custom">Harga Jual (Rp)</label>
+          <input type="number" name="selling_price" min="0" step="any" class="form-control-custom" value="{{ old('selling_price', $item->selling_price) }}" required>
+          @error('selling_price')<div class="form-feedback-custom invalid-custom">{{ $message }}</div>@enderror
+        </div>
+
+        <div class="col-md-6 mb-3">
+          <label class="form-label-custom">Harga Modal (Rp)</label>
+          <input type="number" name="cost_price" min="0" step="any" class="form-control-custom" value="{{ old('cost_price', $item->cost_price ?? 0) }}" required>
+          @error('cost_price')<div class="form-feedback-custom invalid-custom">{{ $message }}</div>@enderror
+        </div>
       </div>
 
       <div class="form-check-custom mb-3">
-        <input type="checkbox" class="form-check-input-custom" id="is_service" name="is_service" value="1" @checked(old('is_service', $item->is_service))>
+        <input type="checkbox" class="form-check-input-custom" id="is_service" name="is_service" value="1" {{ old('is_service', $item->is_service) ? 'checked' : '' }}>
         <label for="is_service" class="form-label-custom mb-0">Tanpa stok (layanan / jasa)</label>
       </div>
 
-            <div id="stock-fields" class="row">
-        @if ($isNew)
-          <div class="col-md-6"><x-input name="stock" label="Stok Awal" type="number" min="0" step="any" :value="0" /></div>
+      <div id="stock-fields" class="row">
+        @if (! $item->exists)
+          <div class="col-md-6 mb-3">
+            <label class="form-label-custom">Stok Awal</label>
+            <input type="number" name="stock" min="0" step="any" class="form-control-custom" value="{{ old('stock', 0) }}">
+            @error('stock')<div class="form-feedback-custom invalid-custom">{{ $message }}</div>@enderror
+          </div>
         @endif
-        <div class="col-md-6"><x-input name="min_stock" label="Batas Stok Menipis" type="number" min="0" step="any" :value="$item->min_stock ?? 0" hint="Peringatan muncul jika stok sama atau di bawah angka ini." /></div>
+
+        <div class="col-md-6 mb-3">
+          <label class="form-label-custom">Batas Stok Menipis</label>
+          <input type="number" name="min_stock" min="0" step="any" class="form-control-custom" value="{{ old('min_stock', $item->min_stock ?? 0) }}">
+          <small class="text-muted">Peringatan muncul jika stok sama dengan atau di bawah angka ini.</small>
+        </div>
       </div>
 
       <div class="mb-3">
-        <label for="photo" class="form-label-custom">Foto (opsional, maks. 2 MB)</label>
-        <input type="file" id="photo" name="photo" accept="image/*" class="form-control-custom">
+        <label class="form-label-custom">Foto (opsional, maksimal 2 MB)</label>
+        <input type="file" name="photo" accept="image/*" class="form-control-custom">
         @error('photo')<div class="form-feedback-custom invalid-custom">{{ $message }}</div>@enderror
-        @if ($item->photo)<img src="{{ asset('storage/' . $item->photo) }}" alt="" class="rounded mt-2" style="height:70px">@endif
+        @if ($item->photo)
+          <img src="{{ asset('storage/' . $item->photo) }}" alt="" class="rounded mt-2" style="height:70px">
+        @endif
       </div>
 
       <div class="d-flex gap-2">
@@ -51,9 +90,17 @@
 
 @push('scripts')
 <script>
-  const serviceBox = document.getElementById('is_service');
-  const stockFields = document.getElementById('stock-fields');
-  const toggleStock = () => stockFields.classList.toggle('d-none', serviceBox.checked);
+  var serviceBox = document.getElementById('is_service');
+  var stockFields = document.getElementById('stock-fields');
+
+  function toggleStock() {
+    if (serviceBox.checked) {
+      stockFields.classList.add('d-none');
+    } else {
+      stockFields.classList.remove('d-none');
+    }
+  }
+
   serviceBox.addEventListener('change', toggleStock);
   toggleStock();
 </script>

@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\Business;
 use App\Models\ExpenseCategory;
+use App\Models\Level;
+use App\Models\LevelMenu;
 use App\Models\Unit;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -11,8 +13,6 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 class UsahaController extends Controller
 {
@@ -23,24 +23,24 @@ class UsahaController extends Controller
 
     public function login(Request $request)
     {
-        $credentials = $request->validate([
+        $request->validate([
             'email'    => 'required|email',
             'password' => 'required',
         ]);
 
-        $user = User::where('email', $credentials['email'])->first();
+        $user = User::where('email', $request->email)->first();
 
         if ($user && ! $user->is_active) {
-            throw ValidationException::withMessages(['email' => 'Akun Anda dinonaktifkan. Hubungi pemilik usaha.']);
+            return back()->withInput()->withErrors(['email' => 'Akun Anda dinonaktifkan. Hubungi pemilik usaha.']);
         }
 
-        if (! Auth::attempt($credentials)) {
-            throw ValidationException::withMessages(['email' => 'Email atau kata sandi salah.']);
+        if (! Auth::attempt(['email' => $request->email, 'password' => $request->password])) {
+            return back()->withInput()->withErrors(['email' => 'Email atau kata sandi salah.']);
         }
 
         $request->session()->regenerate();
 
-        return redirect()->intended('/');
+        return redirect()->route('dashboard');
     }
 
     public function showRegister()
@@ -50,14 +50,22 @@ class UsahaController extends Controller
 
     public function register(Request $request)
     {
-        $data = $request->validate([
-            'name'     => 'required|string|max:150',
+        $request->validate([
+            'name'     => 'required|max:150',
             'email'    => 'required|email|max:150|unique:users,email',
-            'phone'    => 'nullable|string|max:20',
-            'password' => 'required|string|min:6|confirmed',
+            'phone'    => 'nullable|max:20',
+            'password' => 'required|min:6|confirmed',
         ]);
 
-        Auth::login(User::create($data + ['role' => 'owner', 'is_active' => true]));
+        $user = User::create([
+            'name'      => $request->name,
+            'email'     => $request->email,
+            'phone'     => $request->phone,
+            'password'  => Hash::make($request->password),
+            'is_active' => 1,
+        ]);
+
+        Auth::login($user);
 
         return redirect()->route('usaha.create')->with('success', 'Akun berhasil dibuat. Silakan lengkapi profil usaha.');
     }
@@ -73,20 +81,26 @@ class UsahaController extends Controller
 
     public function profil()
     {
-        return view('usaha.profil', ['user' => auth()->user()->load('business')]);
+        $user = User::with(['business', 'level'])->find(auth()->id());
+
+        return view('usaha.profil', compact('user'));
     }
 
     public function profilUpdate(Request $request)
     {
-        $user = $request->user();
+        $user = auth()->user();
 
-        $data = $request->validate([
-            'name'  => 'required|string|max:150',
-            'email' => ['required', 'email', 'max:150', Rule::unique('users', 'email')->ignore($user->id_user, 'id_user')],
-            'phone' => 'nullable|string|max:20',
+        $request->validate([
+            'name'  => 'required|max:150',
+            'email' => 'required|email|max:150|unique:users,email,' . $user->id_user . ',id_user',
+            'phone' => 'nullable|max:20',
         ]);
 
-        $user->update($data);
+        $user->update([
+            'name'  => $request->name,
+            'email' => $request->email,
+            'phone' => $request->phone,
+        ]);
 
         return back()->with('success', 'Profil berhasil diperbarui.');
     }
@@ -100,14 +114,16 @@ class UsahaController extends Controller
     {
         $request->validate([
             'current_password' => 'required',
-            'password'         => 'required|string|min:6|confirmed',
+            'password'         => 'required|min:6|confirmed',
         ]);
 
-        if (! Hash::check($request->current_password, $request->user()->password)) {
-            throw ValidationException::withMessages(['current_password' => 'Kata sandi lama tidak sesuai.']);
+        $user = auth()->user();
+
+        if (! Hash::check($request->current_password, $user->password)) {
+            return back()->withErrors(['current_password' => 'Kata sandi lama tidak sesuai.']);
         }
 
-        $request->user()->update(['password' => $request->password]);
+        $user->update(['password' => Hash::make($request->password)]);
 
         return back()->with('success', 'Kata sandi berhasil diubah.');
     }
@@ -118,48 +134,94 @@ class UsahaController extends Controller
             return redirect()->route('usaha.show');
         }
 
-        return view('usaha.usaha-form', ['business' => new Business()]);
+        $business = new Business();
+
+        return view('usaha.usaha-form', compact('business'));
     }
 
     public function usahaStore(Request $request)
     {
-        abort_if(auth()->user()->id_business, 403);
+        if (auth()->user()->id_business) {
+            abort(403);
+        }
 
-        $data = $this->validateBusiness($request);
+        $request->validate([
+            'business_name' => 'required|max:150',
+            'business_type' => 'required|max:100',
+            'address'       => 'nullable|max:1000',
+            'phone'         => 'nullable|max:20',
+            'logo'          => 'nullable|image|max:2048',
+        ]);
 
-        DB::transaction(function () use ($request, $data) {
-            $user = $request->user();
+        $user = auth()->user();
 
-            if ($request->hasFile('logo')) {
-                $data['logo'] = $request->file('logo')->store('logos', 'public');
-            }
+        $logo = null;
+        if ($request->hasFile('logo')) {
+            $logo = $request->file('logo')->store('logos', 'public');
+        }
 
-            $business = Business::create($data + ['id_owner' => $user->id_user]);
-            $user->update(['id_business' => $business->id_business]);
+        DB::beginTransaction();
 
-            Unit::create(['id_business' => $business->id_business, 'unit_name' => 'pcs']);
-            foreach (['Bahan', 'Gaji', 'Sewa', 'Listrik'] as $name) {
-                ExpenseCategory::create(['id_business' => $business->id_business, 'category_name' => $name]);
-            }
-        });
+        $business = Business::create([
+            'id_owner'      => $user->id_user,
+            'business_name' => $request->business_name,
+            'business_type' => $request->business_type,
+            'address'       => $request->address,
+            'phone'         => $request->phone,
+            'logo'          => $logo,
+        ]);
+
+        $levelPemilik  = Level::create(['id_business' => $business->id_business, 'level_name' => 'Pemilik', 'is_owner' => 1]);
+        $levelKaryawan = Level::create(['id_business' => $business->id_business, 'level_name' => 'Karyawan', 'is_owner' => 0]);
+
+        LevelMenu::create(['id_level' => $levelKaryawan->id_level, 'menu' => 'item']);
+        LevelMenu::create(['id_level' => $levelKaryawan->id_level, 'menu' => 'transaksi']);
+
+        $user->update(['id_business' => $business->id_business, 'id_level' => $levelPemilik->id_level]);
+
+        Unit::create(['id_business' => $business->id_business, 'unit_name' => 'pcs']);
+
+        foreach (['Bahan', 'Gaji', 'Sewa', 'Listrik'] as $nama) {
+            ExpenseCategory::create(['id_business' => $business->id_business, 'category_name' => $nama]);
+        }
+
+        DB::commit();
 
         return redirect()->route('dashboard')->with('success', 'Profil usaha berhasil dibuat. Selamat datang!');
     }
 
     public function usahaShow()
     {
-        return view('usaha.usaha', ['business' => auth()->user()->business]);
+        $business = auth()->user()->business;
+
+        return view('usaha.usaha', compact('business'));
     }
 
     public function usahaEdit()
     {
-        return view('usaha.usaha-form', ['business' => auth()->user()->business]);
+        $business = auth()->user()->business;
+
+        return view('usaha.usaha-form', compact('business'));
     }
 
     public function usahaUpdate(Request $request)
     {
+        $request->validate([
+            'business_name' => 'required|max:150',
+            'business_type' => 'required|max:100',
+            'address'       => 'nullable|max:1000',
+            'phone'         => 'nullable|max:20',
+            'logo'          => 'nullable|image|max:2048',
+        ]);
+
         $business = auth()->user()->business;
-        $data     = $this->validateBusiness($request);
+
+        $data = [
+            'business_name' => $request->business_name,
+            'business_type' => $request->business_type,
+            'address'       => $request->address,
+            'phone'         => $request->phone,
+        ];
 
         if ($request->hasFile('logo')) {
             if ($business->logo) {
@@ -173,114 +235,212 @@ class UsahaController extends Controller
         return redirect()->route('usaha.show')->with('success', 'Profil usaha berhasil diperbarui.');
     }
 
-    private function validateBusiness(Request $request): array
-    {
-        return $request->validate([
-            'business_name' => 'required|string|max:150',
-            'business_type' => 'required|string|max:100',
-            'address'       => 'nullable|string|max:1000',
-            'phone'         => 'nullable|string|max:20',
-            'logo'          => 'nullable|image|max:2048',
-        ]);
-    }
-
     public function userIndex(Request $request)
     {
-        $users = User::where('id_business', $this->businessId())
-            ->when($request->q, fn ($q, $s) => $q->where(fn ($w) => $w->where('name', 'like', "%$s%")->orWhere('email', 'like', "%$s%")))
-            ->orderBy('role')->orderBy('name')
-            ->paginate(10)->withQueryString();
+        $query = User::with('level')->where('id_business', $this->businessId());
+
+        if ($request->q) {
+            $query->where(function ($q) use ($request) {
+                $q->where('name', 'like', '%' . $request->q . '%')
+                  ->orWhere('email', 'like', '%' . $request->q . '%');
+            });
+        }
+
+        $users = $query->orderBy('id_level')->orderBy('name')->paginate(10)->withQueryString();
 
         return view('usaha.pengguna', compact('users'));
     }
 
     public function userCreate()
     {
-        return view('usaha.pengguna-form', ['user' => new User(['role' => 'cashier', 'is_active' => true])]);
+        $user   = new User(['is_active' => 1]);
+        $levels = Level::where('id_business', $this->businessId())->orderBy('level_name')->get();
+
+        return view('usaha.pengguna-form', compact('user', 'levels'));
     }
 
     public function userStore(Request $request)
     {
-        $data = $request->validate([
-            'name'     => 'required|string|max:150',
+        $bid = $this->businessId();
+
+        $request->validate([
+            'name'     => 'required|max:150',
             'email'    => 'required|email|max:150|unique:users,email',
-            'phone'    => 'nullable|string|max:20',
-            'password' => 'required|string|min:6|confirmed',
-            'role'     => 'required|in:owner,cashier',
+            'phone'    => 'nullable|max:20',
+            'password' => 'required|min:6|confirmed',
+            'id_level' => 'required|exists:levels,id_level,id_business,' . $bid,
         ]);
 
-        User::create($data + ['id_business' => $this->businessId(), 'is_active' => true]);
+        User::create([
+            'id_business' => $bid,
+            'id_level'    => $request->id_level,
+            'name'        => $request->name,
+            'email'       => $request->email,
+            'phone'       => $request->phone,
+            'password'    => Hash::make($request->password),
+            'is_active'   => 1,
+        ]);
 
         return redirect()->route('pengguna.index')->with('success', 'Akun pengguna berhasil ditambahkan.');
     }
 
-    public function userShow(User $pengguna)
+    public function userShow($id)
     {
-        $this->ensureSameBusiness($pengguna);
+        $user = User::with(['business', 'level'])->where('id_business', $this->businessId())->findOrFail($id);
 
-        return view('usaha.pengguna-detail', ['user' => $pengguna->load('business')]);
+        return view('usaha.pengguna-detail', compact('user'));
     }
 
-    public function userEdit(User $pengguna)
+    public function userEdit($id)
     {
-        $this->ensureSameBusiness($pengguna);
+        $user   = User::where('id_business', $this->businessId())->findOrFail($id);
+        $levels = Level::where('id_business', $this->businessId())->orderBy('level_name')->get();
 
-        return view('usaha.pengguna-form', ['user' => $pengguna]);
+        return view('usaha.pengguna-form', compact('user', 'levels'));
     }
 
-    public function userUpdate(Request $request, User $pengguna)
+    public function userUpdate(Request $request, $id)
     {
-        $this->ensureSameBusiness($pengguna);
+        $bid  = $this->businessId();
+        $user = User::where('id_business', $bid)->findOrFail($id);
 
-        $data = $request->validate([
-            'name'     => 'required|string|max:150',
-            'email'    => ['required', 'email', 'max:150', Rule::unique('users', 'email')->ignore($pengguna->id_user, 'id_user')],
-            'phone'    => 'nullable|string|max:20',
-            'password' => 'nullable|string|min:6|confirmed',
-            'role'     => 'required|in:owner,cashier',
+        $request->validate([
+            'name'     => 'required|max:150',
+            'email'    => 'required|email|max:150|unique:users,email,' . $user->id_user . ',id_user',
+            'phone'    => 'nullable|max:20',
+            'password' => 'nullable|min:6|confirmed',
+            'id_level' => 'required|exists:levels,id_level,id_business,' . $bid,
         ]);
 
-        if ($pengguna->is(auth()->user())) {
-            $data['role'] = 'owner';
+        $data = [
+            'name'  => $request->name,
+            'email' => $request->email,
+            'phone' => $request->phone,
+        ];
+
+        if ($request->password) {
+            $data['password'] = Hash::make($request->password);
         }
 
-        if (empty($data['password'])) {
-            unset($data['password']);
+        if ($user->id_user != auth()->id()) {
+            $data['id_level'] = $request->id_level;
         }
 
-        $pengguna->update($data);
+        $user->update($data);
 
         return redirect()->route('pengguna.index')->with('success', 'Data pengguna berhasil diperbarui.');
     }
 
-    public function userToggle(User $pengguna)
+    public function userToggle($id)
     {
-        $this->ensureSameBusiness($pengguna);
+        $user = User::where('id_business', $this->businessId())->findOrFail($id);
 
-        if ($pengguna->is(auth()->user())) {
+        if ($user->id_user == auth()->id()) {
             return back()->with('error', 'Anda tidak bisa menonaktifkan akun sendiri.');
         }
 
-        $pengguna->update(['is_active' => ! $pengguna->is_active]);
+        $user->update(['is_active' => ! $user->is_active]);
 
-        return back()->with('success', 'Akun ' . ($pengguna->is_active ? 'diaktifkan.' : 'dinonaktifkan.'));
+        return back()->with('success', 'Status akun berhasil diubah.');
     }
 
-    public function userDestroy(User $pengguna)
+    public function userDestroy($id)
     {
-        $this->ensureSameBusiness($pengguna);
+        $user = User::where('id_business', $this->businessId())->findOrFail($id);
 
-        if ($pengguna->is(auth()->user())) {
+        if ($user->id_user == auth()->id()) {
             return back()->with('error', 'Anda tidak bisa menghapus akun sendiri.');
         }
 
-        $pengguna->delete();
+        $user->delete();
 
         return redirect()->route('pengguna.index')->with('success', 'Akun pengguna berhasil dihapus.');
     }
 
-    private function ensureSameBusiness(User $user): void
+    public function levelIndex()
     {
-        abort_unless($user->id_business === auth()->user()->id_business, 404);
+        $levels = Level::withCount('users')->with('menus')
+            ->where('id_business', $this->businessId())
+            ->orderByDesc('is_owner')->orderBy('level_name')
+            ->get();
+
+        return view('usaha.level', compact('levels'));
+    }
+
+    public function levelStore(Request $request)
+    {
+        $bid = $this->businessId();
+
+        $request->validate([
+            'level_name' => 'required|max:100|unique:levels,level_name,NULL,id_level,id_business,' . $bid,
+        ]);
+
+        $level = Level::create([
+            'id_business' => $bid,
+            'level_name'  => $request->level_name,
+            'is_owner'    => 0,
+        ]);
+
+        return redirect()->route('level.edit', $level->id_level)->with('success', 'Level dibuat. Sekarang pilih menu yang boleh dibuka.');
+    }
+
+    public function levelEdit($id)
+    {
+        $level = Level::with('menus')->where('id_business', $this->businessId())->findOrFail($id);
+
+        if ($level->is_owner) {
+            return redirect()->route('level.index')->with('error', 'Level pemilik selalu boleh membuka semua menu.');
+        }
+
+        $menus = config('menu.bisa_diatur');
+
+        return view('usaha.level-form', compact('level', 'menus'));
+    }
+
+    public function levelUpdate(Request $request, $id)
+    {
+        $bid   = $this->businessId();
+        $level = Level::where('id_business', $bid)->findOrFail($id);
+
+        if ($level->is_owner) {
+            abort(403);
+        }
+
+        $kodeMenu = implode(',', array_keys(config('menu.bisa_diatur')));
+
+        $request->validate([
+            'level_name' => 'required|max:100|unique:levels,level_name,' . $level->id_level . ',id_level,id_business,' . $bid,
+            'menu'       => 'nullable|array',
+            'menu.*'     => 'in:' . $kodeMenu,
+        ]);
+
+        $level->update(['level_name' => $request->level_name]);
+
+        LevelMenu::where('id_level', $level->id_level)->delete();
+
+        if ($request->menu) {
+            foreach ($request->menu as $kode) {
+                LevelMenu::create(['id_level' => $level->id_level, 'menu' => $kode]);
+            }
+        }
+
+        return redirect()->route('level.index')->with('success', 'Level berhasil disimpan.');
+    }
+
+    public function levelDestroy($id)
+    {
+        $level = Level::where('id_business', $this->businessId())->findOrFail($id);
+
+        if ($level->is_owner) {
+            return back()->with('error', 'Level pemilik tidak bisa dihapus.');
+        }
+
+        if ($level->users()->count() > 0) {
+            return back()->with('error', 'Level tidak bisa dihapus karena masih dipakai pengguna.');
+        }
+
+        $level->delete();
+
+        return redirect()->route('level.index')->with('success', 'Level berhasil dihapus.');
     }
 }

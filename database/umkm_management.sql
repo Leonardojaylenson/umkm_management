@@ -10,7 +10,7 @@
 --   - Timestamp    : created_at, updated_at
 --
 --  Modul:
---   1. User & Profil Usaha          : businesses, users
+--   1. User & Profil Usaha          : businesses, levels, level_menus, users
 --   2. Item & Stok                  : categories, units, items, stock_histories
 --   3. Transaksi Penjualan          : customers, transactions, transaction_details
 --   4. Pengeluaran, Hutang, Piutang : expense_categories, expenses, suppliers,
@@ -37,7 +37,7 @@ DROP TABLE IF EXISTS
   `expenses`, `expense_categories`,
   `transaction_details`, `transactions`, `customers`,
   `stock_histories`, `items`, `units`, `categories`,
-  `users`, `businesses`;
+  `users`, `level_menus`, `levels`, `businesses`;
 
 
 -- =====================================================================
@@ -58,23 +58,54 @@ CREATE TABLE `businesses` (
   PRIMARY KEY (`id_business`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Akun pemilik & karyawan (kasir)
+-- Level pengguna, dibuat per usaha. Contoh: Pemilik, Karyawan, Kasir Senior.
+-- is_owner = 1 -> level pemilik: boleh membuka semua menu (tidak perlu diatur).
+CREATE TABLE `levels` (
+  `id_level`    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `id_business` BIGINT UNSIGNED NOT NULL,
+  `level_name`  VARCHAR(100) NOT NULL,
+  `is_owner`    TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = level pemilik',
+  `created_at`  TIMESTAMP NULL DEFAULT NULL,
+  `updated_at`  TIMESTAMP NULL DEFAULT NULL,
+  PRIMARY KEY (`id_level`),
+  UNIQUE KEY `uq_levels_name` (`id_business`, `level_name`),
+  CONSTRAINT `fk_levels_business` FOREIGN KEY (`id_business`)
+    REFERENCES `businesses` (`id_business`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Menu apa saja yang boleh dibuka oleh sebuah level.
+-- Kolom menu berisi kode menu: item, transaksi, pengeluaran, hutang, laporan (dashboard selalu boleh)
+-- (daftar lengkapnya ada di config/menu.php)
+CREATE TABLE `level_menus` (
+  `id_level_menu` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `id_level`      BIGINT UNSIGNED NOT NULL,
+  `menu`          VARCHAR(50) NOT NULL,
+  PRIMARY KEY (`id_level_menu`),
+  UNIQUE KEY `uq_level_menus` (`id_level`, `menu`),
+  CONSTRAINT `fk_level_menus_level` FOREIGN KEY (`id_level`)
+    REFERENCES `levels` (`id_level`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Akun pengguna. Hak akses ditentukan oleh level-nya (id_level).
 CREATE TABLE `users` (
   `id_user`     BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `id_business` BIGINT UNSIGNED NULL COMMENT 'NULL saat pemilik baru registrasi & belum buat profil usaha',
+  `id_level`    BIGINT UNSIGNED NULL COMMENT 'NULL saat pemilik baru registrasi & belum buat profil usaha',
   `name`        VARCHAR(150) NOT NULL,
   `email`       VARCHAR(150) NOT NULL,
   `phone`       VARCHAR(20) NULL,
   `password`    VARCHAR(255) NOT NULL COMMENT 'Hash bcrypt',
-  `role`        ENUM('owner','cashier') NOT NULL DEFAULT 'cashier' COMMENT 'owner = pemilik, cashier = kasir',
   `is_active`   TINYINT(1) NOT NULL DEFAULT 1 COMMENT '0 = akun dinonaktifkan',
   `created_at`  TIMESTAMP NULL DEFAULT NULL,
   `updated_at`  TIMESTAMP NULL DEFAULT NULL,
   PRIMARY KEY (`id_user`),
   UNIQUE KEY `uq_users_email` (`email`),
   KEY `idx_users_business` (`id_business`),
+  KEY `idx_users_level` (`id_level`),
   CONSTRAINT `fk_users_business` FOREIGN KEY (`id_business`)
-    REFERENCES `businesses` (`id_business`) ON DELETE CASCADE
+    REFERENCES `businesses` (`id_business`) ON DELETE CASCADE,
+  CONSTRAINT `fk_users_level` FOREIGN KEY (`id_level`)
+    REFERENCES `levels` (`id_level`) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE `businesses`
@@ -553,9 +584,17 @@ DELIMITER ;
 INSERT INTO `businesses` (`id_business`, `id_owner`, `business_name`, `business_type`, `address`, `phone`, `created_at`, `updated_at`) VALUES
 (1, NULL, 'Warung Berkah', 'Kuliner', 'Jl. Merdeka No. 10, Jakarta', '081234567890', NOW(), NOW());
 
-INSERT INTO `users` (`id_user`, `id_business`, `name`, `email`, `password`, `role`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, 1, 'Pemilik Usaha', 'owner@example.com',   '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'owner',   1, NOW(), NOW()),
-(2, 1, 'Kasir Satu',    'cashier@example.com', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'cashier', 1, NOW(), NOW());
+INSERT INTO `levels` (`id_level`, `id_business`, `level_name`, `is_owner`, `created_at`, `updated_at`) VALUES
+(1, 1, 'Pemilik',  1, NOW(), NOW()),
+(2, 1, 'Karyawan', 0, NOW(), NOW());
+
+INSERT INTO `level_menus` (`id_level`, `menu`) VALUES
+(2, 'item'),
+(2, 'transaksi');
+
+INSERT INTO `users` (`id_user`, `id_business`, `id_level`, `name`, `email`, `password`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 1, 1, 'Pemilik Usaha', 'owner@example.com',   '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 1, NOW(), NOW()),
+(2, 1, 2, 'Kasir Satu',    'cashier@example.com', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 1, NOW(), NOW());
 
 UPDATE `businesses` SET `id_owner` = 1 WHERE `id_business` = 1;
 

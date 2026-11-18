@@ -2,24 +2,41 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\StockHistory;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Foundation\Bus\DispatchesJobs;
 use Illuminate\Foundation\Validation\ValidatesRequests;
 use Illuminate\Routing\Controller as BaseController;
-use Illuminate\Validation\Rules\Exists;
-use Illuminate\Validation\Rule;
 
 class Controller extends BaseController
 {
     use AuthorizesRequests, DispatchesJobs, ValidatesRequests;
 
-    protected function businessId(): int
+    protected function businessId()
     {
-        return (int) auth()->user()->id_business;
+        return auth()->user()->id_business;
     }
 
-    protected function existsInBusiness(string $table, string $column): Exists
+    protected function changeStock($item, $type, $quantity, $note, $idTransaction = null)
     {
-        return Rule::exists($table, $column)->where('id_business', $this->businessId());
+        if ($item->is_service) {
+            return;
+        }
+
+        $before = $item->stock;
+        $after  = $before + $quantity;
+
+        $item->update(['stock' => $after]);
+
+        StockHistory::create([
+            'id_item'        => $item->id_item,
+            'id_user'        => auth()->id(),
+            'id_transaction' => $idTransaction,
+            'type'           => $type,
+            'quantity'       => $quantity,
+            'stock_before'   => $before,
+            'stock_after'    => $after,
+            'note'           => $note,
+        ]);
     }
 }

@@ -7,8 +7,10 @@
   <div class="footer-right">
     <ul class="footer-links">
       <li><a href="{{ route('dashboard') }}" class="footer-link">Dashboard</a></li>
-      <li><a href="{{ route('transaksi.index') }}" class="footer-link">Transaksi</a></li>
-      @if (auth()->user()->isOwner())
+      @if (auth()->user()->canAccess('transaksi'))
+        <li><a href="{{ route('transaksi.index') }}" class="footer-link">Transaksi</a></li>
+      @endif
+      @if (auth()->user()->canAccess('laporan'))
         <li><a href="{{ route('laporan.index') }}" class="footer-link">Laporan</a></li>
       @endif
     </ul>

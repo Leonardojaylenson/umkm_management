@@ -3,10 +3,8 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Illuminate\Support\Facades\Hash;
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
@@ -15,7 +13,7 @@ class User extends Authenticatable
 
     protected $primaryKey = 'id_user';
 
-    protected $fillable = ['id_business', 'name', 'email', 'phone', 'password', 'role', 'is_active'];
+    protected $guarded = [];
 
     protected $hidden = ['password'];
 
@@ -26,23 +24,31 @@ class User extends Authenticatable
         return '';
     }
 
-    public function setPasswordAttribute(string $value): void
-    {
-        $this->attributes['password'] = Hash::make($value);
-    }
-
-    public function business(): BelongsTo
+    public function business()
     {
         return $this->belongsTo(Business::class, 'id_business');
     }
 
-    public function isOwner(): bool
+    public function level()
     {
-        return $this->role === 'owner';
+        return $this->belongsTo(Level::class, 'id_level');
     }
 
-    public function getRoleLabelAttribute(): string
+    public function isOwner()
     {
-        return $this->isOwner() ? 'Pemilik' : 'Kasir';
+        return $this->level !== null && $this->level->is_owner;
+    }
+
+    public function canAccess($menu)
+    {
+        if ($this->isOwner()) {
+            return true;
+        }
+
+        if ($this->level === null) {
+            return false;
+        }
+
+        return $this->level->menus->contains('menu', $menu);
     }
 }
